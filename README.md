@@ -30,7 +30,7 @@ Removes the aforementioned registry entry.
 
 Runs the application in the background.
 
-**Note: On first run a config file will be written to `$HOME/winmgr.json`.**
+**Note: On first run a config file will be written to `$HOME/winmgr.json`.** Changes made to the config won't automatically apply; you will need to end the winmgr.exe task in Task Manager then re-run it.
 
 ```bash
 ./target/release/winmgr.exe run
