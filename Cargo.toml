@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 nohash-hasher = "0.2.0"
-winit = { version = "0.30.12", features = ["serde"] }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

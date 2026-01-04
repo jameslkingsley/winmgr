@@ -24,11 +24,13 @@ use windows::{
     },
     core::PCSTR,
 };
-use winit::keyboard::KeyCode;
 use winreg::{
     RegKey,
     enums::{HKEY_CURRENT_USER, KEY_SET_VALUE},
 };
+
+const RUN_KEY_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const RUN_VALUE_NAME: &str = "WinMgr";
 
 #[derive(Parser)]
 #[command(name = "winmgr")]
@@ -74,9 +76,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
-
-const RUN_KEY_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_VALUE_NAME: &str = "WinMgr";
 
 fn install_autostart() -> io::Result<()> {
     let exe_path = env::current_exe()?;
@@ -127,9 +126,31 @@ struct Config {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct KeyBind {
-    modifier: KeyCode,
-    key: KeyCode,
+    modifiers: Vec<HexModifier>,
+    key: HexVirtualKey,
     layout: Layout,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HexModifier(pub String);
+
+impl From<&HexModifier> for HOT_KEY_MODIFIERS {
+    fn from(value: &HexModifier) -> Self {
+        let without_prefix = value.0.trim_start_matches("0x");
+        let int = u32::from_str_radix(without_prefix, 16).expect("invalid hex");
+        HOT_KEY_MODIFIERS(int)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HexVirtualKey(pub String);
+
+impl From<&HexVirtualKey> for VIRTUAL_KEY {
+    fn from(value: &HexVirtualKey) -> Self {
+        let without_prefix = value.0.trim_start_matches("0x");
+        let int = u16::from_str_radix(without_prefix, 16).expect("invalid hex");
+        VIRTUAL_KEY(int)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -226,13 +247,13 @@ impl DefaultLayout {
             }
             DefaultLayout::CenterSmall => {
                 let w = inner_width * 2 / 5;
-                let h = inner_height * 9 / 12;
+                let h = inner_height * 6 / 12;
                 let x = work_left + (work_width - w) / 2;
                 let y = work_top + (work_height - h) / 2;
                 (x, y, w, h)
             }
             DefaultLayout::CenterMedium => {
-                let w = inner_width * 2 / 3;
+                let w = inner_width * 3 / 4;
                 let h = inner_height * 9 / 10;
                 let x = work_left + (work_width - w) / 2;
                 let y = work_top + (work_height - h) / 2;
@@ -268,20 +289,20 @@ impl KeyBindRegistry {
 
             unsafe {
                 write!(buf, "winmgr_bind_{index}").unwrap();
-                debug_assert_eq!(buf, format!("winmgr_bind_{index}"));
 
                 let id = GlobalAddAtomA(PCSTR::from_raw(buf.as_ptr()));
 
-                let Some(modifier) = keybind.modifier_to_hk_modifier() else {
-                    continue;
-                };
+                let mods = keybind
+                    .modifiers
+                    .iter()
+                    .fold(HOT_KEY_MODIFIERS(0), |mut acc, m| {
+                        acc |= m.into();
+                        acc
+                    });
 
-                let Some(keycode) = keybind.key_to_virtual_key() else {
-                    continue;
-                };
+                let key: VIRTUAL_KEY = (&keybind.key).into();
 
-                if let Err(err) =
-                    RegisterHotKey(None, id.into(), modifier | MOD_NOREPEAT, keycode.0.into())
+                if let Err(err) = RegisterHotKey(None, id.into(), mods | MOD_NOREPEAT, key.0.into())
                 {
                     eprintln!("Failed to register keybind {buf}: {err}");
                     continue;
@@ -331,60 +352,16 @@ impl KeyBindRegistry {
                         continue;
                     }
 
-                    let flags: SET_WINDOW_POS_FLAGS =
-                        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED;
-
                     let (x, y, w, h) = match kb.layout {
                         Layout::Custom(layout) => (layout.x, layout.y, layout.w, layout.h),
                         Layout::Default(layout) => layout.calc(self.cfg.margin, &mi),
                     };
 
+                    let flags: SET_WINDOW_POS_FLAGS =
+                        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED;
+
                     SetWindowPos(hwnd, None, x, y, w, h, flags).unwrap();
                 }
-            }
-        }
-    }
-}
-
-impl KeyBind {
-    fn key_to_virtual_key(&self) -> Option<VIRTUAL_KEY> {
-        Some(match self.key {
-            KeyCode::Digit0 => VK_0,
-            KeyCode::Digit1 => VK_1,
-            KeyCode::Digit2 => VK_2,
-            KeyCode::Digit3 => VK_3,
-            KeyCode::Digit4 => VK_4,
-            KeyCode::Digit5 => VK_5,
-            KeyCode::Digit6 => VK_6,
-            KeyCode::Digit7 => VK_7,
-            KeyCode::Digit8 => VK_8,
-            KeyCode::Digit9 => VK_9,
-            KeyCode::Numpad0 => VK_NUMPAD0,
-            KeyCode::Numpad1 => VK_NUMPAD1,
-            KeyCode::Numpad2 => VK_NUMPAD2,
-            KeyCode::Numpad3 => VK_NUMPAD3,
-            KeyCode::Numpad4 => VK_NUMPAD4,
-            KeyCode::Numpad5 => VK_NUMPAD5,
-            KeyCode::Numpad6 => VK_NUMPAD6,
-            KeyCode::Numpad7 => VK_NUMPAD7,
-            KeyCode::Numpad8 => VK_NUMPAD8,
-            KeyCode::Numpad9 => VK_NUMPAD9,
-            other => {
-                eprintln!("Unsupported key: {other:?}");
-                return None;
-            }
-        })
-    }
-
-    fn modifier_to_hk_modifier(&self) -> Option<HOT_KEY_MODIFIERS> {
-        match self.modifier {
-            KeyCode::AltLeft | KeyCode::AltRight => Some(MOD_ALT),
-            KeyCode::ControlLeft | KeyCode::ControlRight => Some(MOD_CONTROL),
-            KeyCode::SuperLeft | KeyCode::SuperRight => Some(MOD_WIN),
-            KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(MOD_SHIFT),
-            other => {
-                eprintln!("Invalid modifier: {other:?}");
-                None
             }
         }
     }
